@@ -10,8 +10,8 @@ namespace sjtu {
 template <class T> class deque {
 private:
 static constexpr size_t BLOCK_SIZE = 16;
-    static constexpr size_t MAX_BLOCK_SIZE = 32;
-    static constexpr size_t MIN_BLOCK_SIZE = 8;
+    static constexpr size_t MAX_BLOCK_SIZE = 256;
+    static constexpr size_t MIN_BLOCK_SIZE = 40;
     struct block {
         T* data;
         size_t size;
@@ -64,7 +64,7 @@ static constexpr size_t BLOCK_SIZE = 16;
           size--;
         }
         void insert(size_t pos, const T& value) {
-          if (size >= MAX_BLOCK_SIZE || pos > size) return;
+          if (size > MAX_BLOCK_SIZE || pos > size) return;
           for (size_t i = size; i > pos; --i) {
             new(data + i) T(std::move(data[i - 1]));
             data[i - 1].~T();
@@ -98,7 +98,7 @@ static constexpr size_t BLOCK_SIZE = 16;
       return {cur, offset};
     }
     void split_block(block* b) {
-      if (b->size <= BLOCK_SIZE) return;
+      if (b->size <= MAX_BLOCK_SIZE) return;
       block* new_block = new block();
       size_t mid = b->size / 2;
       for (size_t i = mid; i < b->size; ++i) {
@@ -163,9 +163,9 @@ public:
     friend class const_iterator;
     
   public:
-    iterator() : container(nullptr), block(nullptr), offset(0) {}
-    iterator(const deque* c, Block* b, size_t o) 
-      : container(c), block(b), offset(o) {}
+    iterator() : container(nullptr), current_block(nullptr), offset(0) {}
+    iterator(const deque* c, block* b, size_t o) 
+      : container(c), current_block(b), offset(o) {}
     iterator(const iterator& other) = default;
     /**
      * return a new iterator which points to the n-next element.
@@ -210,40 +210,77 @@ public:
       return pos1 - pos2;
     }
     iterator &operator+=(const int &n) {
-      if(n == 0) return *this;
-      int remaining = n;
-      if(remaining <= 0) {
-        remaining = -remaining;
-        while (current_block && remaining > 0) {
-          if (remaining<static_cast<int>(offset)) {
-            offset -= remaining;
-            remaining = 0;
-          } else {
-            remaining -= offset;
-            current_block = current_block->prev;
-            if (current_block) {
-              offset = current_block->size;
-            } else {
-              offset = 0;
-            }
-          }
-        }
+    if (n == 0) return *this;
+    if (current_block == nullptr) {
+    if (n < 0) {
+        if (container->total_size == 0) return *this;
+        current_block = container->tail;
+        offset = current_block->size - 1;
+        return *this += (n + 1);
+    } else {
         return *this;
-      }
-      while (current_block && remaining > 0) {
-        if (offset + remaining < current_block->size) {
-          offset += remaining;
-          remaining = 0;
-        } else {
-          remaining -= (current_block->size - offset);
-          current_block = current_block->next;
-          offset = 0;
-        }
-      }
-      return *this;
     }
+}
+    int remaining = n;
+    if (remaining < 0) {
+        remaining = -remaining;
+        while (remaining > 0) {
+            if (!current_block) {
+                break;
+            }
+            if (remaining <= static_cast<int>(offset)) {
+                offset -= remaining;
+                remaining = 0;
+            } else {
+                remaining -= offset;
+                current_block = current_block->prev;
+                if (current_block) {
+                    offset = current_block->size;
+                } else {
+                    offset = 0;
+                }
+            }
+        }
+        if (current_block && offset == current_block->size) {
+    current_block = current_block->next;
+    offset = 0;
+}
+        return *this;
+    }
+    while (remaining > 0) {
+        if (!current_block) {
+            break;
+        }
+        size_t remaining_in_block = current_block->size - offset;
+        if (remaining <= static_cast<int>(remaining_in_block)) {
+            offset += remaining;
+            remaining = 0;
+        } else {
+            remaining -= remaining_in_block;
+            current_block = current_block->next;
+            offset = 0;
+        }
+    }
+    if (current_block && offset == current_block->size) {
+    current_block = current_block->next;
+    offset = 0;
+}
+    return *this;
+}
     iterator &operator-=(const int &n) {
-      return *this += (-n);
+      if (n == 0) return *this;
+    if (current_block == nullptr && n > 0) {
+        current_block = container->tail;
+        if (current_block) {
+            offset = current_block->size;
+        }
+        return *this += (-n);
+    }
+    if (current_block && offset == current_block->size) {
+    current_block = current_block->next;
+    offset = 0;
+}
+    return *this += (-n);
     }
 
     /**
@@ -279,7 +316,16 @@ public:
      * --iter
      */
     iterator &operator--() {
-      if(!current_block) return *this;
+      if (current_block == nullptr) {
+        current_block = container->tail;
+        if (current_block) {
+            offset = current_block->size;
+        }
+        if (offset > 0) {
+            offset--;
+        }
+        return *this;
+    }
       if(offset > 0) {
         offset--;
       } else {
@@ -380,39 +426,72 @@ public:
       return pos1 - pos2;
     }
     const_iterator &operator+=(const int &n) {
-      if(n == 0) return *this;
-      int remaining = n;
-      if(remaining <= 0) {
+    if (n == 0) return *this;
+    if (current_block == nullptr) {
+    if (n < 0) {
+        if (container->total_size == 0) return *this;
+        current_block = container->tail;
+        offset = current_block->size - 1; 
+        return *this += (n + 1); 
+    } else {
+        return *this;
+    }
+}
+    int remaining = n;
+    if (remaining < 0) {
         remaining = -remaining;
-        while (current_block && remaining > 0) {
-          if (remaining<static_cast<int>(offset)) {
-            offset -= remaining;
-            remaining = 0;
-          } else {
-            remaining -= offset;
-            current_block = current_block->prev;
-            if (current_block) {
-              offset = current_block->size;
+        while (remaining > 0) {
+            if (!current_block) break;
+            if (remaining <= static_cast<int>(offset)) {
+                offset -= remaining;
+                remaining = 0;
             } else {
-              offset = 0;
+                remaining -= offset;
+                current_block = current_block->prev;
+                if (current_block) {
+                    offset = current_block->size;
+                } else {
+                    offset = 0;
+                }
             }
-          }
+        }
+        if (current_block && offset == current_block->size) {
+            current_block = current_block->next;
+            offset = 0;
         }
         return *this;
-      }
-      while (current_block && remaining > 0) {
-        if (offset + remaining < current_block->size) {
-          offset += remaining;
-          remaining = 0;
-        } else {
-          remaining -= (current_block->size - offset);
-          current_block = current_block->next;
-          offset = 0;
-        }
-      }
-      return *this;
     }
+    while (remaining > 0) {
+        if (!current_block) break;
+        size_t remaining_in_block = current_block->size - offset;
+        if (remaining <= static_cast<int>(remaining_in_block)) {
+            offset += remaining;
+            remaining = 0;
+        } else {
+            remaining -= remaining_in_block;
+            current_block = current_block->next;
+            offset = 0;
+        }
+    }
+    if (current_block && offset == current_block->size) {
+        current_block = current_block->next;
+        offset = 0;
+    }
+    return *this;
+}
     const_iterator &operator-=(const int &n) {
+      if (n == 0) return *this;
+    if (current_block == nullptr && n > 0) {
+        current_block = container->tail;
+        if (current_block) {
+            offset = current_block->size;
+        }
+        return *this += (-n);
+    }
+    if (current_block && offset == current_block->size) {
+    current_block = current_block->next;
+    offset = 0;
+}
       return *this += (-n);
     }   
     const_iterator operator++(int) {
@@ -436,7 +515,16 @@ public:
       return tmp;
     }
     const_iterator &operator--() {
-      if(!current_block) return *this;
+      if (current_block == nullptr) {
+        current_block = container->tail;
+        if (current_block) {
+            offset = current_block->size;
+        }
+        if (offset > 0) {
+            offset--;
+        }
+        return *this;
+    }
       if(offset > 0) {
         offset--;
       } else {
@@ -622,6 +710,9 @@ public:
    * throw if the iterator is invalid or it points to a wrong place.
    */
   iterator insert(iterator pos, const T &value) {
+    if (pos.container != this) { 
+        throw invalid_iterator();
+    }
     if(pos==end()) {
       push_back(value);
       return iterator(this, tail, tail->size - 1);
@@ -631,10 +722,36 @@ public:
     }
     block* b = pos.current_block;
     size_t offset = pos.offset;
-    b->insert(offset, value);
-    total_size++;
-    rebalance();
-    return iterator(this, b, offset);
+    if(b->size < MAX_BLOCK_SIZE) {
+      b->insert(offset, value);
+      total_size++;
+      return iterator(this, b, offset);
+    } 
+    size_t mid = b->size / 2;
+    block* new_block = new block();
+    for (size_t i = mid; i < b->size; ++i) {
+      new_block->push_back(std::move(b->data[i]));
+      b->data[i].~T();
+    }
+    b->size = mid;
+    new_block->prev = b;
+    new_block->next = b->next;
+    if (b->next) {
+      b->next->prev = new_block;
+    } else {
+      tail = new_block;
+    }
+    b->next = new_block;
+    block_count++;
+    if (offset <= mid) {
+      b->insert(offset, value);
+      total_size++;
+      return iterator(this, b, offset);
+    } else {
+      new_block->insert(offset - mid, value);
+      total_size++;
+      return iterator(this, new_block, offset - mid);
+    }
   }
 
   /**
@@ -644,33 +761,67 @@ public:
    * the iterator is invalid, or it points to a wrong place.
    */
   iterator erase(iterator pos) {
+    if (pos.container != this) { 
+        throw invalid_iterator();
+    }
     if (empty()) {
-      throw container_is_empty();
+        throw container_is_empty();
     }
-    if(pos==end()) {
-      throw invalid_iterator();
+    if (pos == end()) {
+        throw invalid_iterator();
     }
-    if(!pos.current_block) {
-      throw invalid_iterator();
+    if (!pos.current_block) {
+        throw invalid_iterator();
     }
     block* b = pos.current_block;
     size_t offset = pos.offset;
     b->erase(offset);
     total_size--;
-    rebalance();
-    return iterator(this, b, offset);
-  }
+    
+    iterator next_it = pos;
+    if (offset == b->size) {
+        next_it.current_block = b->next;
+        next_it.offset = 0;
+    }
+    if (b->size == 0) {
+        if (b->prev) {
+            b->prev->next = b->next;
+        } else {
+            head = b->next;
+        }
+        if (b->next) {
+            b->next->prev = b->prev;
+        } else {
+            tail = b->prev;
+        }
+        if (next_it.current_block == b) {
+            next_it.current_block = b->next;
+            next_it.offset = 0;
+        }
+        delete b;
+        block_count--;
+    }
+    
+    return next_it;
+}
 
   /**
    * add an element to the end.
    */
   void push_back(const T &value) {
-    if (!tail) {
-      tail = head = new block();
+    if (!tail || tail->size >= MAX_BLOCK_SIZE) {
+      block* new_block = new block();
+      if(!head){
+        head = tail = new_block;
+      } else {
+        tail->next = new_block;
+        new_block->prev = tail;
+        tail = new_block;
+      }
+      block_count++;
     }
     tail->push_back(value);
     total_size++;
-    rebalance();
   }
 
   /**
@@ -679,23 +830,41 @@ public:
    */
   void pop_back() {
     if (empty()) {
-      throw container_is_empty();
+        throw container_is_empty();
     }
     tail->pop_back();
     total_size--;
-    rebalance();
-  }
+    
+    if (tail->size == 0) {
+        block* to_delete = tail;
+        tail = tail->prev;
+        if (tail) {
+            tail->next = nullptr;
+        } else {
+            head = nullptr;
+        }
+        delete to_delete;
+        block_count--;
+    }
+}
 
   /**
    * insert an element to the beginning.
    */
   void push_front(const T &value) {
-    if (!head) {
-      head = tail = new block();
+    if (!head || head->size >= MAX_BLOCK_SIZE) {
+      block* new_block = new block();
+      if (!head) {
+        head = tail = new_block;
+      } else {
+        head->prev = new_block;
+        new_block->next = head;
+        head = new_block;
+      }
+      block_count++;
     }
     head->push_front(value);
     total_size++;
-    rebalance();
   }
 
   /**
@@ -704,12 +873,23 @@ public:
    */
   void pop_front() {
     if (empty()) {
-      throw container_is_empty();
+        throw container_is_empty();
     }
     head->pop_front();
     total_size--;
-    rebalance();
-  }
+    
+    if (head->size == 0) {
+        block* to_delete = head;
+        head = head->next;
+        if (head) {
+            head->prev = nullptr;
+        } else {
+            tail = nullptr;
+        }
+        delete to_delete;
+        block_count--;
+    }
+}
 };
 
 } // namespace sjtu
